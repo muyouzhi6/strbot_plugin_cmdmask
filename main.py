@@ -9,6 +9,7 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 from astrbot.core.config import AstrBotConfig
 from astrbot.core.star.filter.custom_filter import CustomFilter
+from astrbot.core.star.star import star_map
 
 VERSION = "0.3.0"
 
@@ -21,12 +22,7 @@ class MappingEntry:
     reply_text: str
 
 
-class _State:
-    enabled: bool = True
-    mappings: list[MappingEntry] = []
-
-
-STATE = _State()
+APPLIED_KEY = "__astrbot_plugin_cmdmask:applied"
 
 
 def _normalize_text(text: str) -> str:
@@ -265,17 +261,21 @@ def _build_mappings_from_text(text: str) -> list[MappingEntry]:
     return mappings
 
 
-def _apply_mapping(event: AstrMessageEvent, cfg: AstrBotConfig) -> bool:
+def _apply_mapping(
+    event: AstrMessageEvent,
+    cfg: AstrBotConfig,
+    enabled: bool,
+    mappings: list[MappingEntry],
+) -> bool:
     # 入口日志 - 用 INFO 确保可见
-    logger.info(f"[CmdMask] _apply_mapping enter: enabled={STATE.enabled}, mappings={len(STATE.mappings)}")
+    logger.info(f"[CmdMask] _apply_mapping enter: enabled={enabled}, mappings={len(mappings)}")
     
-    if not STATE.enabled or not STATE.mappings:
-        logger.info(f"[CmdMask] skip: enabled={STATE.enabled}, mappings={len(STATE.mappings)}")
+    if not enabled or not mappings:
+        logger.info(f"[CmdMask] skip: enabled={enabled}, mappings={len(mappings)}")
         return False
     
     # 检查是否已处理 - 使用命名空间 key 避免冲突
-    applied_key = "__astrbot_plugin_cmdmask:applied"
-    if event.get_extra(applied_key, False):
+    if event.get_extra(APPLIED_KEY, False):
         logger.info(f"[CmdMask] skip: already applied, extra_keys={list(event._extras.keys()) if hasattr(event, '_extras') else 'unknown'}")
         return True
     
@@ -307,7 +307,7 @@ def _apply_mapping(event: AstrMessageEvent, cfg: AstrBotConfig) -> bool:
     msg = _strip_wake_prefix(raw_msg, prefixes)  # 去掉 wake_prefix 后再匹配
     logger.info(f"[CmdMask] original_msg={original_msg!r}, prefixes={prefixes}, used_prefix={used_prefix!r}, msg={msg!r}")
 
-    for entry in STATE.mappings:
+    for entry in mappings:
         # 配置归一化：去掉常见命令前缀
         alias_norm = _strip_wake_prefix(_normalize_text(entry.alias_raw), prefixes, strip_common=True)
         logger.info(f"[CmdMask] checking: alias_raw={entry.alias_raw!r}, alias_norm={alias_norm!r}, msg={msg!r}")
@@ -338,7 +338,7 @@ def _apply_mapping(event: AstrMessageEvent, cfg: AstrBotConfig) -> bool:
             
             logger.info(f"[CmdMask] rewriting: {event.message_str!r} -> {new_msg!r}")
 
-            event.set_extra("__astrbot_plugin_cmdmask:applied", True)
+            event.set_extra(APPLIED_KEY, True)
             event.set_extra("__astrbot_plugin_cmdmask:reply_mode", entry.reply_mode)
             event.set_extra("__astrbot_plugin_cmdmask:reply_text", entry.reply_text)
             event.set_extra("__astrbot_plugin_cmdmask:alias", alias_norm)
@@ -362,9 +362,15 @@ def _apply_mapping(event: AstrMessageEvent, cfg: AstrBotConfig) -> bool:
 
 class _CommandMaskFilter(CustomFilter):
     def filter(self, event: AstrMessageEvent, cfg: AstrBotConfig) -> bool:
-        logger.debug(f"[CmdMask] filter called, enabled={STATE.enabled}, mappings_count={len(STATE.mappings)}")
+        plugin_md = star_map.get(__name__)
+        plugin = plugin_md.star_cls if plugin_md else None
+        if not isinstance(plugin, CmdMask):
+            return False
+        logger.debug(
+            f"[CmdMask] filter called, enabled={plugin._enabled}, mappings_count={len(plugin._mappings)}",
+        )
         try:
-            _apply_mapping(event, cfg)
+            _apply_mapping(event, cfg, plugin._enabled, plugin._mappings)
         except Exception as exc:
             logger.warning(f"[CmdMask] mapping error: {exc}")
         return False
@@ -378,8 +384,12 @@ class CmdMask(Star):
     ) -> None:
         super().__init__(context)
         self._config = config
+        self._enabled = True
+        self._mappings: list[MappingEntry] = []
         self._load_config()
-        logger.info(f"[CmdMask] loaded v{VERSION} with {len(STATE.mappings)} mappings")
+        logger.info(
+            f"[CmdMask] loaded v{VERSION} with {len(self._mappings)} mappings",
+        )
 
     def _cfg(self, key: str, default: Any = None) -> Any:
         if self._config is None:
@@ -407,8 +417,8 @@ class CmdMask(Star):
         mappings.extend(_build_mappings_from_text(rules_text))
         mappings.extend(_build_mappings(raw_mappings))
 
-        STATE.enabled = enabled
-        STATE.mappings = mappings
+        self._enabled = enabled
+        self._mappings = mappings
 
     @filter.custom_filter(_CommandMaskFilter)
     @filter.event_message_type(filter.EventMessageType.ALL, priority=100000)
@@ -417,7 +427,7 @@ class CmdMask(Star):
 
     @filter.on_decorating_result(priority=100000)
     async def _override_reply(self, event: AstrMessageEvent):
-        if not event.get_extra("__astrbot_plugin_cmdmask:applied", False):
+        if not event.get_extra(APPLIED_KEY, False):
             return
 
         mode = event.get_extra("__astrbot_plugin_cmdmask:reply_mode", "keep")
