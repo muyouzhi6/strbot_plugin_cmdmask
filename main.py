@@ -23,10 +23,31 @@ class MappingEntry:
 
 
 APPLIED_KEY = "__astrbot_plugin_cmdmask:applied"
+WHITESPACE_PATTERN = re.compile(r"\s+")
+REPLY_MODE_MAP = {
+    "silent": "silent",
+    "mute": "silent",
+    "no_reply": "silent",
+    "keep": "keep",
+    "default": "keep",
+    "passthrough": "keep",
+    "custom": "custom",
+}
+REPLY_MODE_CN_MAP = {
+    "静默": "silent",
+    "不回复": "silent",
+    "不回": "silent",
+    "无回复": "silent",
+    "自定义": "custom",
+    "自订": "custom",
+    "保留": "keep",
+    "默认": "keep",
+    "原样": "keep",
+}
 
 
 def _normalize_text(text: str) -> str:
-    return re.sub(r"\s+", " ", text.strip())
+    return WHITESPACE_PATTERN.sub(" ", text.strip())
 
 
 def _read_str(value: Any) -> str:
@@ -71,6 +92,49 @@ def _strip_wake_prefix(text: str, prefixes: list[str], strip_common: bool = Fals
     return text
 
 
+def _normalize_reply_mode(value: Any) -> str:
+    if value is None:
+        return "keep"
+    text = str(value).strip()
+    if not text:
+        return "keep"
+    lower = text.lower()
+    if lower in REPLY_MODE_MAP:
+        return REPLY_MODE_MAP[lower]
+    if text in REPLY_MODE_CN_MAP:
+        return REPLY_MODE_CN_MAP[text]
+    return "keep"
+
+
+def _parse_reply_option(opt_strip: str) -> tuple[str | None, str | None]:
+    if not opt_strip:
+        return None, None
+    lower = opt_strip.lower()
+
+    if lower in REPLY_MODE_MAP:
+        return REPLY_MODE_MAP[lower], None
+    if opt_strip in REPLY_MODE_CN_MAP:
+        return REPLY_MODE_CN_MAP[opt_strip], None
+
+    if lower.startswith("reply_mode=") or opt_strip.startswith("回复模式="):
+        mode = opt_strip.split("=", 1)[1].strip()
+        return _normalize_reply_mode(mode), None
+
+    if (
+        lower.startswith("reply=")
+        or lower.startswith("reply_text=")
+        or opt_strip.startswith("回复=")
+        or opt_strip.startswith("回复文本=")
+    ):
+        return "custom", opt_strip.split("=", 1)[1].strip()
+    if lower.startswith("text=") or opt_strip.startswith("文本="):
+        return "custom", opt_strip.split("=", 1)[1].strip()
+    if opt_strip.startswith("回复:"):
+        return "custom", opt_strip.split(":", 1)[1].strip()
+
+    return "custom", opt_strip
+
+
 def _parse_mapping_line(line: str) -> MappingEntry | None:
     if not line or not isinstance(line, str):
         return None
@@ -95,61 +159,11 @@ def _parse_mapping_line(line: str) -> MappingEntry | None:
     reply_text = ""
 
     for opt in parts[1:]:
-        opt_strip = opt.strip()
-        lower = opt_strip.lower()
-
-        if lower in ("silent", "mute", "no_reply") or opt_strip in (
-            "静默",
-            "不回复",
-            "不回",
-            "无回复",
-        ):
-            reply_mode = "silent"
-            continue
-        if lower in ("keep", "default", "passthrough") or opt_strip in (
-            "保留",
-            "默认",
-            "原样",
-        ):
-            reply_mode = "keep"
-            continue
-        if lower in ("custom",) or opt_strip in ("自定义", "自订"):
-            reply_mode = "custom"
-            continue
-
-        if lower.startswith("reply_mode=") or opt_strip.startswith("回复模式="):
-            mode = opt_strip.split("=", 1)[1].strip()
-            mode_lower = mode.lower()
-            if mode_lower in ("silent", "custom", "keep"):
-                reply_mode = mode_lower
-            elif mode in ("静默", "不回复", "不回", "无回复"):
-                reply_mode = "silent"
-            elif mode in ("自定义", "自订"):
-                reply_mode = "custom"
-            elif mode in ("保留", "默认", "原样"):
-                reply_mode = "keep"
-            continue
-
-        if (
-            lower.startswith("reply=")
-            or lower.startswith("reply_text=")
-            or opt_strip.startswith("回复=")
-            or opt_strip.startswith("回复文本=")
-        ):
-            reply_text = opt_strip.split("=", 1)[1].strip()
-            reply_mode = "custom"
-            continue
-        if lower.startswith("text=") or opt_strip.startswith("文本="):
-            reply_text = opt_strip.split("=", 1)[1].strip()
-            reply_mode = "custom"
-            continue
-        if opt_strip.startswith("回复:"):
-            reply_text = opt_strip.split(":", 1)[1].strip()
-            reply_mode = "custom"
-            continue
-
-        reply_text = opt_strip
-        reply_mode = "custom"
+        mode, text = _parse_reply_option(opt.strip())
+        if mode:
+            reply_mode = mode
+        if text is not None:
+            reply_text = text
 
     return MappingEntry(
         alias_raw=alias_raw,
@@ -157,28 +171,6 @@ def _parse_mapping_line(line: str) -> MappingEntry | None:
         reply_mode=reply_mode,
         reply_text=reply_text,
     )
-
-
-def _normalize_reply_mode(value: Any) -> str:
-    if value is None:
-        return "keep"
-    text = str(value).strip()
-    if not text:
-        return "keep"
-    lower = text.lower()
-    if lower in ("silent", "mute", "no_reply"):
-        return "silent"
-    if lower in ("custom",):
-        return "custom"
-    if lower in ("keep", "default", "passthrough"):
-        return "keep"
-    if text in ("静默", "不回复", "不回", "无回复"):
-        return "silent"
-    if text in ("自定义", "自订"):
-        return "custom"
-    if text in ("保留", "默认", "原样"):
-        return "keep"
-    return "keep"
 
 
 def _build_mapping_from_config(
