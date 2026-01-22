@@ -159,6 +159,28 @@ def _parse_mapping_line(line: str) -> MappingEntry | None:
     )
 
 
+def _normalize_reply_mode(value: Any) -> str:
+    if value is None:
+        return "keep"
+    text = str(value).strip()
+    if not text:
+        return "keep"
+    lower = text.lower()
+    if lower in ("silent", "mute", "no_reply"):
+        return "silent"
+    if lower in ("custom",):
+        return "custom"
+    if lower in ("keep", "default", "passthrough"):
+        return "keep"
+    if text in ("静默", "不回复", "不回", "无回复"):
+        return "silent"
+    if text in ("自定义", "自订"):
+        return "custom"
+    if text in ("保留", "默认", "原样"):
+        return "keep"
+    return "keep"
+
+
 def _build_mapping_from_config(
     command: Any,
     alias_text: Any,
@@ -233,15 +255,20 @@ def _build_mappings(raw_list: list[Any]) -> list[MappingEntry]:
             alias_str = _read_str(alias)
             if not command_str or not alias_str:
                 continue
-            reply_mode = _read_text(
+            reply_mode = _normalize_reply_mode(
                 item.get("reply_mode") or item.get("回复模式") or "keep",
             )
             reply_text = _read_text(item.get("reply_text") or item.get("回复") or "")
-            entry = _parse_mapping_line(
-                f"{command_str} => {alias_str} || reply_mode={reply_mode} || reply={reply_text}",
+            if reply_text and reply_mode == "keep":
+                reply_mode = "custom"
+            mappings.append(
+                MappingEntry(
+                    alias_raw=alias_str,
+                    target_raw=command_str,
+                    reply_mode=reply_mode,
+                    reply_text=reply_text,
+                ),
             )
-            if entry:
-                mappings.append(entry)
     return mappings
 
 
