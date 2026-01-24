@@ -286,24 +286,10 @@ def _apply_mapping(
     enabled: bool,
     mappings: list[MappingEntry],
 ) -> bool:
-    # 入口日志 - 用 INFO 确保可见
-    logger.info(f"[CmdMask] _apply_mapping enter: enabled={enabled}, mappings={len(mappings)}")
-    
     if not enabled or not mappings:
-        logger.info(f"[CmdMask] skip: enabled={enabled}, mappings={len(mappings)}")
-        return False
-    
-    # 检查是否已处理 - 使用命名空间 key 避免冲突
-    if event.get_extra(APPLIED_KEY, False):
-        logger.info(f"[CmdMask] skip: already applied, extra_keys={list(event._extras.keys()) if hasattr(event, '_extras') else 'unknown'}")
-        return True
-    
-    if not event.is_at_or_wake_command:
-        logger.info(f"[CmdMask] skip: is_at_or_wake_command=False, message_str={event.get_message_str()!r}")
         return False
 
     raw_msg = _normalize_text(event.get_message_str())
-    logger.info(f"[CmdMask] raw_msg={raw_msg!r}")
     if not raw_msg:
         return False
 
@@ -324,12 +310,10 @@ def _apply_mapping(
             break
     
     msg = _strip_wake_prefix(raw_msg, prefixes)  # 去掉 wake_prefix 后再匹配
-    logger.info(f"[CmdMask] original_msg={original_msg!r}, prefixes={prefixes}, used_prefix={used_prefix!r}, msg={msg!r}")
 
     for entry in mappings:
         # 配置归一化：去掉常见命令前缀
         alias_norm = _strip_wake_prefix(_normalize_text(entry.alias_raw), prefixes, strip_common=True)
-        logger.info(f"[CmdMask] checking: alias_raw={entry.alias_raw!r}, alias_norm={alias_norm!r}, msg={msg!r}")
         if not alias_norm:
             continue
         # 匹配：完全相等，或 alias 后跟任意空白字符
@@ -344,7 +328,6 @@ def _apply_mapping(
                 prefixes,
                 strip_common=True,
             )
-            logger.info(f"[CmdMask] MATCHED! target_raw={entry.target_raw!r}, target_norm={target_norm!r}")
             if not target_norm:
                 continue
             suffix = msg[len(alias_norm) :].strip()
